@@ -7,6 +7,12 @@ os: Visual Studio 2015
 
 environment:
     global:
+      MINGW_32: C:\mingw-w64\i686-6.3.0-posix-dwarf-rt_v5-rev1\mingw32\bin
+      MINGW_64: C:\mingw-w64\x86_64-6.3.0-posix-seh-rt_v5-rev1\mingw64\bin
+      OPENBLAS_32: https://3f23b170c54c2533c070-1c8a9b3114517dc5fe17b7c3f8c63a43.ssl.cf2.rackcdn.com/openblas-5f998ef_gcc7_1_0_win32.zip
+      OPENBLAS_64: https://3f23b170c54c2533c070-1c8a9b3114517dc5fe17b7c3f8c63a43.ssl.cf2.rackcdn.com/openblas-5f998ef_gcc7_1_0_win64.zip
+      OPENBLAS_32_SHA256: 0a12804b08d475179a0411936f509b44d7512f084b4a81c2fa3abe8c9ac4ee09
+      OPENBLAS_64_SHA256: 8f11d8a5a79795a3a1ccb2326c979a0ca426e623eee93f8e35239e3c21e62cd6
       BUILD_COMMIT: v1.13.0rc2
       OPENBLAS_COMMIT: 5f998ef_mingwpy
       OPENBLAS_ROOT: c:\opt
@@ -14,18 +20,18 @@ environment:
       WHEELHOUSE_UPLOADER_SECRET:
         secure:
             9s0gdDGnNnTt7hvyNpn0/ZzOMGPdwPp2SewFTfGzYk7uI+rdAN9rFq2D1gAP4NQh
-      DAILY_COMMIT: master
+      DAILY_COMMIT: 77c873d
 
     matrix:
 
     - PYTHON: "C:\\Python27"
-    - PYTHON: "C:\\Python27-x64"
-    - PYTHON: "C:\\Python34"
-    - PYTHON: "C:\\Python34-x64"
-    - PYTHON: "C:\\Python35"
-    - PYTHON: "C:\\Python35-x64"
-    - PYTHON: "C:\\Python36"
-    - PYTHON: "C:\\Python36-x64"
+    # PYTHON: "C:\\Python27-x64"
+    # PYTHON: "C:\\Python34"
+    # PYTHON: "C:\\Python34-x64"
+    # PYTHON: "C:\\Python35"
+    # PYTHON: "C:\\Python35-x64"
+    # PYTHON: "C:\\Python36"
+    # PYTHON: "C:\\Python36-x64"
 
 install:
   - ps: >-
@@ -74,14 +80,58 @@ install:
   # Pin wheel to 0.26 to avoid Windows ABI tag for built wheel
   - pip install wheel==0.26
   - pip install "cython>=0.25"
-  # Download built openblas libraries
-  - cmd /c windows-wheel-builder\unpack_openblas.bat
+  # Download and install static "openblas.a" to PYTHON\lib
+  - ps: |
+      $PYTHON_ARCH = $env:PYTHON_ARCH
+      $PYTHON = $env:PYTHON
+      If ($PYTHON_ARCH -eq 32) {
+          $OPENBLAS = $env:OPENBLAS_32
+          $OPENBLAS_SHA256 = $env:OPENBLAS_32_SHA256
+      } Else {
+          $OPENBLAS = $env:OPENBLAS_64
+          $OPENBLAS_SHA256 = $env:OPENBLAS_64_SHA256
+      }
+      $clnt = new-object System.Net.WebClient
+      $file = "$(New-TemporaryFile).zip"
+      $tmpdir = New-TemporaryFile | %{ rm $_; mkdir $_ }
+      $destination = "$PYTHON\lib\openblas.lib"
+
+      echo $file
+      echo $tmpdir
+      echo $OPENBLAS
+
+      $clnt.DownloadFile($OPENBLAS,$file)
+
+      $downloaded_hash = Get-FileHash -Algorithm SHA256 $file
+      if ($downloaded_hash.hash -ne $OPENBLAS_SHA256) {
+          $downloaded_hash | Format-List
+          echo $OPENBLAS_SHA256
+          throw "Downloaded OPENBLAS zip SHA256 does not match."
+      }
+
+      Expand-Archive $file $tmpdir
+
+      rm $tmpdir\$PYTHON_ARCH\lib\*.dll.a
+      $lib = ls $tmpdir\$PYTHON_ARCH\lib\*.a | ForEach { ls $_ } | Select-Object -first 1
+      echo $lib
+
+      cp $lib $destination
+      ls $destination
 
 build_script:
   # Build and install the wheel
   - cd numpy
   - git checkout %BUILD_COMMIT%
-  - python ..\windows-wheel-builder\build_numpy.py . %PYTHON_ARCH% %OPENBLAS_ROOT%
+  - ps: |
+      $PYTHON_ARCH = $env:PYTHON_ARCH
+      If ($PYTHON_ARCH -eq 32) {
+          $MINGW = $env:MINGW_32
+      } Else {
+          $MINGW = $env:MINGW_64
+      }
+      $env:Path += ";$MINGW"
+      $env:NPY_NUM_BUILD_JOBS = "4"
+  - python setup.py bdist_wheel
   - cd dist
   - pip install --pre --no-index -f . numpy
   - pip install nose
